@@ -137,14 +137,14 @@ async def handle_text_message(message: Message):
         # Обработка намерений
         if intent == "question_about_results":
             # Вопрос о результатах
-            if session and session.current_results:
+            if session and session.results:
                 # Проверяем, просит ли пользователь показать лучшие вакансии
                 top_keywords = ["топ", "лучш", "самы", "подходящ", "оптимальн", "интересн"]
                 if any(keyword in user_text.lower() for keyword in top_keywords):
                     # Пользователь хочет увидеть топовые вакансии - показываем первые 3
                     await message.answer("🏆 Вот самые подходящие вакансии из найденных:")
 
-                    for vacancy in session.current_results[:3]:
+                    for vacancy in session.results[:3]:
                         vacancy_id = vacancy.get("id")
                         vacancy_text = format_vacancy(vacancy)
                         url = vacancy.get("alternate_url", "")
@@ -162,7 +162,7 @@ async def handle_text_message(message: Message):
                     vacancies_info = "\n".join([
                         f"- {v.get('name', 'Без названия')} "
                         f"(График: {v.get('schedule', {}).get('name', 'Не указано')})"
-                        for v in session.current_results[:3]
+                        for v in session.results[:3]
                     ])
 
                     prompt = f"""Пользователь спрашивает: "{user_text}"
