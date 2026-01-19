@@ -1,0 +1,114 @@
+@router.message(F.text)
+async def handle_text_message(message: Message):
+    """Обработчик текстовых сообщений - ПОЛНОСТЬЮ LLM-based, без keyword ограничений"""
+    user_text = message.text
+    user_id = message.from_user.id
+
+    logger.info(f"Получено сообщение от {user_id}: {user_text}")
+
+    # Проверяем математику (единственная keyword-проверка которую оставляем)
+    if any(op in user_text for op in ['+', '-', '*', '/', '(', ')']):
+        allowed_chars = set('0123456789+-*/().% ')
+        if all(c in allowed_chars for c in user_text.strip()):
+            from handlers.basic import calculate
+            result = calculate(user_text)
+            await message.answer(result)
+            return
+
+    # Используем LLM для ВСЕХ остальных сообщений
+    groq_service = get_groq_service()
+    if not groq_service:
+        # Если LLM недоступен - fallback на простой поиск
+        await perform_unified_search(message, user_id, user_text)
+        return
+
+    try:
+        # Получаем историю разговора и текущую сессию
+        conversation_history = await db.get_conversation_history(user_id, limit=6)
+        session = search_manager.get_session(user_id)
+
+        # Понимаем намерение пользователя через LLM
+        intent_result = await groq_service.understand_user_intent(
+            user_message=user_text,
+            conversation_history=conversation_history
+        )
+
+        logger.info(f"Intent: '{user_text}' -> {intent_result}")
+
+        intent = intent_result.get("intent")
+
+        # Обработка намерений
+        if intent == "question_about_results":
+            # Вопрос о результатах - генерируем ответ через LLM
+            if session and session.current_results:
+                # Готовим контекст о последних вакансиях
+                vacancies_info = "\n".join([
+                    f"- {v.get('name', 'Без названия')} "
+                    f"(График: {v.get('schedule', {}).get('name', 'Не указано')})"
+                    for v in session.current_results[:3]
+                ])
+
+                prompt = f"""Пользователь спрашивает: "{user_text}"
+
+Последние показанные вакансии:
+{vacancies_info}
+
+Ответь на вопрос конкретно, используя информацию о вакансиях. Будь кратким."""
+
+                response = await groq_service.get_completion(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=200
+                )
+
+                if response:
+                    await message.answer(response)
+                    # Сохраняем в историю
+                    await db.add_to_conversation_history(user_id, user_text, response)
+                else:
+                    await message.answer("Могу поискать что-то ещё?")
+            else:
+                await message.answer("Сначала выполните поиск, чтобы я мог ответить на вопросы о результатах!")
+            return
+
+        elif intent == "refine_search":
+            # Уточнение предыдущего поиска
+            if session and session.search_query:
+                city = intent_result.get("city")
+                await refine_existing_search(message, user_id, user_text, session, city)
+            else:
+                # Нет предыдущего поиска - выполняем новый
+                await perform_unified_search(message, user_id, user_text)
+            return
+
+        elif intent in ["new_search", "continue_previous"]:
+            # Новый поиск или продолжение
+            search_query = intent_result.get("search_query", user_text)
+            await perform_unified_search(message, user_id, search_query)
+            return
+
+        elif intent == "offtopic":
+            # Offtopic - генерируем ответ через LLM
+            response = await groq_service.get_assistant_response(
+                user_message=user_text,
+                conversation_history=conversation_history,
+                bot_capabilities="""
+🔍 Поиск работы на hh.ru
+⭐ Избранное
+📊 Статистика
+🔢 Калькулятор
+"""
+            )
+
+            if response:
+                await message.answer(response)
+                # Сохраняем в историю
+                await db.add_to_conversation_history(user_id, user_text, response)
+            else:
+                await message.answer("Я помогаю искать работу! Какую вакансию ищете?")
+            return
+
+    except Exception as e:
+        logger.error(f"Ошибка LLM обработки: {e}")
+        # Fallback на простой поиск
+        await perform_unified_search(message, user_id, user_text)
