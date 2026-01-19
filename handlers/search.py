@@ -136,34 +136,53 @@ async def handle_text_message(message: Message):
 
         # Обработка намерений
         if intent == "question_about_results":
-            # Вопрос о результатах - генерируем ответ через LLM
+            # Вопрос о результатах
             if session and session.current_results:
-                # Готовим контекст о последних вакансиях
-                vacancies_info = "\n".join([
-                    f"- {v.get('name', 'Без названия')} "
-                    f"(График: {v.get('schedule', {}).get('name', 'Не указано')})"
-                    for v in session.current_results[:3]
-                ])
+                # Проверяем, просит ли пользователь показать лучшие вакансии
+                top_keywords = ["топ", "лучш", "самы", "подходящ", "оптимальн", "интересн"]
+                if any(keyword in user_text.lower() for keyword in top_keywords):
+                    # Пользователь хочет увидеть топовые вакансии - показываем первые 3
+                    await message.answer("🏆 Вот самые подходящие вакансии из найденных:")
 
-                prompt = f"""Пользователь спрашивает: "{user_text}"
+                    for vacancy in session.current_results[:3]:
+                        vacancy_id = vacancy.get("id")
+                        vacancy_text = format_vacancy(vacancy)
+                        url = vacancy.get("alternate_url", "")
+                        is_favorite = await db.is_favorite(user_id, vacancy_id)
+
+                        keyboard = get_vacancy_keyboard(
+                            vacancy_id=vacancy_id,
+                            url=url,
+                            is_favorite=is_favorite
+                        )
+
+                        await message.answer(vacancy_text, reply_markup=keyboard, disable_web_page_preview=True)
+                else:
+                    # Обычный вопрос - генерируем текстовый ответ
+                    vacancies_info = "\n".join([
+                        f"- {v.get('name', 'Без названия')} "
+                        f"(График: {v.get('schedule', {}).get('name', 'Не указано')})"
+                        for v in session.current_results[:3]
+                    ])
+
+                    prompt = f"""Пользователь спрашивает: "{user_text}"
 
 Последние показанные вакансии:
 {vacancies_info}
 
 Ответь на вопрос конкретно, используя информацию о вакансиях. Будь кратким."""
 
-                response = await groq_service.get_completion(
-                    [{"role": "user", "content": prompt}],
-                    temperature=0.7,
-                    max_tokens=200
-                )
+                    response = await groq_service.get_completion(
+                        [{"role": "user", "content": prompt}],
+                        temperature=0.7,
+                        max_tokens=200
+                    )
 
-                if response:
-                    await message.answer(response)
-                    # Сохраняем в историю
-                    await db.add_to_conversation_history(user_id, user_text, response)
-                else:
-                    await message.answer("Могу поискать что-то ещё?")
+                    if response:
+                        await message.answer(response)
+                        await db.add_to_conversation_history(user_id, user_text, response)
+                    else:
+                        await message.answer("Могу поискать что-то ещё?")
             else:
                 await message.answer("Сначала выполните поиск, чтобы я мог ответить на вопросы о результатах!")
             return
