@@ -558,6 +558,7 @@ async def perform_smart_search(message: Message, user_id: int, parsed_params: di
     # Преобразуем названия городов в ID
     area_id = None
     if "area" in parsed_params:
+        from utils.areas_cache import areas_cache
         area_name = parsed_params["area"].lower()
         # Используем areas_cache для поиска города
         area_id = areas_cache.find_city(area_name) if areas_cache.is_loaded else None
